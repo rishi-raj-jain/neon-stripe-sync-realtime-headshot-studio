@@ -1,0 +1,270 @@
+{
+  "id": "4358b94d-db2d-4f7b-85a2-ef46daac825d",
+  "prevId": "b8fc63b1-9384-4245-8db4-336a8fe9b28f",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "app.customers": {
+      "name": "customers",
+      "schema": "app",
+      "columns": {
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "stripe_customer_id": {
+          "name": "stripe_customer_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "customers_stripe_customer_id_unique": {
+          "name": "customers_stripe_customer_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "stripe_customer_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "app.jobs": {
+      "name": "jobs",
+      "schema": "app",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "style": {
+          "name": "style",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "variants": {
+          "name": "variants",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cost": {
+          "name": "cost",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "job_status",
+          "typeSchema": "app",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'awaiting_upload'"
+        },
+        "input_key": {
+          "name": "input_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "input_content_type": {
+          "name": "input_content_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "output_keys": {
+          "name": "output_keys",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "invocation_id": {
+          "name": "invocation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "finished_at": {
+          "name": "finished_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "jobs_user_created_idx": {
+          "name": "jobs_user_created_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "jobs_status_started_idx": {
+          "name": "jobs_status_started_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "started_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "jobs_input_key_unique": {
+          "name": "jobs_input_key_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "input_key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "jobs_variants_check": {
+          "name": "jobs_variants_check",
+          "value": "\"app\".\"jobs\".\"variants\" between 1 and 4"
+        },
+        "jobs_cost_check": {
+          "name": "jobs_cost_check",
+          "value": "\"app\".\"jobs\".\"cost\" > 0"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {
+    "app.job_status": {
+      "name": "job_status",
+      "schema": "app",
+      "values": [
+        "awaiting_upload",
+        "processing",
+        "succeeded",
+        "failed",
+        "insufficient_credits",
+        "expired"
+      ]
+    }
+  },
+  "schemas": {
+    "app": "app"
+  },
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {
+    "app.credit_balances": {
+      "columns": {
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "purchased": {
+          "name": "purchased",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "spent": {
+          "name": "spent",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "balance": {
+          "name": "balance",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "definition": "\n      with purchased as (\n        select c.user_id,\n               sum(\n                 floor(\n                   coalesce(ch.metadata ->> 'credits', pi.metadata ->> 'credits', '0')::numeric\n                   * (ch.amount - ch.amount_refunded) / nullif(ch.amount, 0)\n                 )\n               )::int as credits\n          from app.customers c\n          join stripe.charges ch on ch.customer = c.stripe_customer_id\n          left join stripe.payment_intents pi on pi.id = ch.payment_intent\n         where ch.status = 'succeeded'\n           and ch.paid\n           and not ch.disputed\n         group by c.user_id\n      ),\n      free_orders as (\n        select c.user_id, sum(coalesce(cs.metadata ->> 'credits', '0')::int)::int as credits\n          from app.customers c\n          join stripe.checkout_sessions cs on cs.customer = c.stripe_customer_id\n         where cs.mode = 'payment'\n           and cs.status = 'complete'\n           and cs.payment_status = 'no_payment_required'\n           and cs.amount_total = 0\n         group by c.user_id\n      ),\n      spent as (\n        select j.user_id, sum(j.cost)::int as credits\n          from app.jobs j\n         where j.status in ('processing', 'succeeded')\n         group by j.user_id\n      )\n      select c.user_id,\n             coalesce(p.credits, 0) + coalesce(f.credits, 0) as purchased,\n             coalesce(s.credits, 0) as spent,\n             coalesce(p.credits, 0) + coalesce(f.credits, 0) - coalesce(s.credits, 0) as balance\n        from app.customers c\n        left join purchased p on p.user_id = c.user_id\n        left join free_orders f on f.user_id = c.user_id\n        left join spent s on s.user_id = c.user_id\n    ",
+      "name": "credit_balances",
+      "schema": "app",
+      "isExisting": false,
+      "materialized": false
+    }
+  },
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

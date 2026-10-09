@@ -1,0 +1,49 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+/* Neon UI theme tokens (the app is dark-only: <html class="dark">), plus the shadcn
+   token mapping and Neon animation keyframes. */
+@import '../components/tokens.css';
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  /* Google Sans, loaded by next/font in layout.tsx */
+  --font-sans: var(--font-google-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-sans);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    @apply font-sans;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+
+  /* Tailwind v4 resets buttons to cursor: default. Everything clickable gets a pointer;
+     disabled controls show not-allowed instead. */
+  a[href],
+  button,
+  [role='button'],
+  select,
+  summary,
+  label:has(> input, > select),
+  input[type='file'],
+  input[type='file']::file-selector-button,
+  input[type='checkbox'],
+  input[type='radio'],
+  input[type='submit'] {
+    cursor: pointer;
+  }
+
+  :disabled,
+  [aria-disabled='true'],
+  :disabled::file-selector-button {
+    cursor: not-allowed;
+  }
+}
