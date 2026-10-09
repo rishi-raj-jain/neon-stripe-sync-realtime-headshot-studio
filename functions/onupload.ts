@@ -2,7 +2,7 @@ import { isStorageObjectCreatedTriggerInvocation, parseTriggerDelivery } from '@
 import { and, eq } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { jobs } from '@/db/schema/app'
-import { BUCKETS, MAX_SELFIE_BYTES, STYLES, buildPrompt, headshotKey, parseSelfieKey, type StyleId } from '@/shared/headshots'
+import { BUCKETS, DAILY_IMAGE_LIMIT, MAX_SELFIE_BYTES, STYLES, buildPrompt, headshotKey, parseSelfieKey, type StyleId } from '@/shared/headshots'
 import { db, sql } from '@functions/lib/db'
 import { env } from '@functions/lib/env'
 import { generateHeadshot } from '@functions/lib/generate'
@@ -14,7 +14,8 @@ import { readObject, writeObject } from '@functions/lib/storage'
  *
  *   1. parse + authenticate the trigger delivery
  *   2. CLAIM the job: under a per-user advisory lock, move it to `processing` only if the
- *      derived wallet balance covers it. That transition is the debit.
+ *      derived wallet balance covers it and the daily image limit has room. That transition
+ *      is the debit (of credits and of the limit).
  *   3. generate → write outputs → `succeeded`, or `failed` (which refunds by construction)
  *
  * Redeliveries are harmless: a job only leaves `awaiting_upload` once.
@@ -52,10 +53,11 @@ app.post('/', async (c) => {
     return c.json({ outcome: 'ignored' })
   }
 
-  const job = await claim(ids.userId, ids.jobId, objectKey, invocation.invocationId)
+  const { job, refused } = await claim(ids.userId, ids.jobId, objectKey, invocation.invocationId)
   if (!job) {
-    log('not claimed (duplicate delivery, expired job, or insufficient credits)')
-    return c.json({ outcome: 'not_claimed' })
+    // refused = rate_limited | insufficient_credits; null = duplicate delivery or expired job.
+    log(`not claimed (${refused ?? 'duplicate delivery or expired job'})`)
+    return c.json({ outcome: 'not_claimed', ...(refused && { refused }) })
   }
   log(`claimed job=${job.id} variants=${job.variants} style=${job.style}`)
 
@@ -81,37 +83,52 @@ app.post('/', async (c) => {
 
 /**
  * One HTTP round trip, one transaction (neon `sql.transaction`):
- *   lock the user's wallet → try to move the job to processing if the balance covers it →
- *   otherwise mark it insufficient_credits. Exactly one of the two updates can match.
+ *   lock the user's wallet → move the job to processing if the balance covers it AND the daily
+ *   image limit has room for it → otherwise mark it rate_limited or insufficient_credits.
+ * Exactly one of the two updates can match. The lock serializes a user's claims, so two uploads
+ * landing together can't both squeeze under the balance or the limit.
  */
-async function claim(userId: string, jobId: string, inputKey: string, invocationId: string): Promise<ClaimedJob | null> {
-  const [, claimed] = await sql.transaction([
+async function claim(userId: string, jobId: string, inputKey: string, invocationId: string): Promise<{ job: ClaimedJob | null; refused: string | null }> {
+  const [, claimed, refused] = await sql.transaction([
     sql`select 1 from pg_advisory_xact_lock(hashtextextended(${userId}, 0))`,
     sql`
       update app.jobs j
          set status = 'processing', started_at = now(), invocation_id = ${invocationId},
              model = ${env.IMAGE_MODEL}
+        from (
+          select coalesce((select b.balance from app.credit_balances b where b.user_id = ${userId}), 0) as balance,
+                 coalesce((select u.used from app.image_usage_24h u where u.user_id = ${userId}), 0) as used
+        ) a -- what the user can spend now: credit balance, images generated in the last 24 hours
        where j.id = ${jobId}
          and j.user_id = ${userId}
          and j.input_key = ${inputKey}
          and j.status = 'awaiting_upload'
-         and coalesce(
-               (select b.balance from app.credit_balances b where b.user_id = ${userId}),
-               0
-             ) >= j.cost
+         and a.balance >= j.cost
+         and a.used + j.variants <= ${DAILY_IMAGE_LIMIT}
       returning j.id, j.style, j.variants, j.input_key`,
     sql`
-      update app.jobs
-         set status = 'insufficient_credits',
+      update app.jobs j
+         set status = case when a.used + j.variants > ${DAILY_IMAGE_LIMIT} then 'rate_limited' else 'insufficient_credits' end::app.job_status,
+             error = case
+                       when a.used + j.variants > ${DAILY_IMAGE_LIMIT}
+                         then ${`You've hit the daily limit of ${DAILY_IMAGE_LIMIT} headshots. No credits were spent, so try again later.`}
+                       else 'You ran out of credits before the upload finished.'
+                     end,
              finished_at = now(),
-             invocation_id = ${invocationId},
-             error = 'You ran out of credits before the upload finished.'
-       where id = ${jobId}
-         and user_id = ${userId}
-         and status = 'awaiting_upload'
-      returning id`,
+             invocation_id = ${invocationId}
+        from (
+          select coalesce((select b.balance from app.credit_balances b where b.user_id = ${userId}), 0) as balance,
+                 coalesce((select u.used from app.image_usage_24h u where u.user_id = ${userId}), 0) as used
+        ) a -- what the user can spend now: credit balance, images generated in the last 24 hours
+       where j.id = ${jobId}
+         and j.user_id = ${userId}
+         and j.status = 'awaiting_upload'
+      returning j.status`,
   ])
-  return (claimed?.[0] as ClaimedJob | undefined) ?? null
+  return {
+    job: (claimed?.[0] as ClaimedJob | undefined) ?? null,
+    refused: (refused?.[0] as { status: string } | undefined)?.status ?? null,
+  }
 }
 
 async function generate(userId: string, job: ClaimedJob, bucket: string, key: string): Promise<string[]> {

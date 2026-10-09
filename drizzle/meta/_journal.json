@@ -43,6 +43,13 @@
       "when": 1791519596992,
       "tag": "0005_stripe_lookup_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791521694728,
+      "tag": "0006_daily_image_limit",
+      "breakpoints": true
     }
   ]
 }

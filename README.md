@@ -9,7 +9,7 @@ Postgres** on **Neon**, with no Stripe webhooks anywhere.
     │ POST /api/jobs ─▶ presigned PUT                           ▼
     └──── selfie ──────▶ Object Storage: selfies/uploads/…   app.credit_balances (VIEW)
                                │ storage_object_created            ▲
-                               ▼                                   │ claim = debit
+                               ▼                                   │ claim = debit (+ daily limit)
                       Neon Function `onupload` ────────────────────┘
                                │ AI Gateway (Responses API, image_generation)
                                ▼
@@ -36,7 +36,7 @@ Postgres** on **Neon**, with no Stripe webhooks anywhere.
   - Nothing can be double-credited, because nothing increments a balance.
 - **The upload is the queue.** The selfie landing in the bucket fires `onupload`. The
   function claims the job in one transaction under a per-user advisory lock, and that
-  claim is the debit. Redeliveries are no-ops.
+  claim is the debit (of credits and of the daily limit). Redeliveries are no-ops.
 - **Writes go to Stripe's API, reads come from Postgres.** `/api/checkout` creates the
   session. After Checkout, the studio polls `/api/credits` until the synced charge appears.
 
@@ -62,15 +62,33 @@ In the account you switch to:
   `drizzle/0003_free_orders_paid_status.sql` (the view) and
   `drizzle/0005_stripe_lookup_indexes.sql` (the indexes).
 
+## Daily image limit
+
+Each user can generate `DAILY_IMAGE_LIMIT` headshots (`src/shared/headshots.ts`, currently 2)
+in any rolling 24 hours, on top of needing the credits.
+
+- **Derived, like the wallet.** `app.image_usage_24h` sums the variants of the user's
+  `processing`/`succeeded` runs that started in the last 24 hours. A failed run gives its
+  images back, just as it returns its credits. Each run's images free up 24 hours after it
+  started.
+- **Enforced at the claim.** `onupload` only moves a job to `processing` if both the balance
+  and the limit cover it, inside the same locked transaction, so two uploads landing together
+  can't both squeeze in. Otherwise the job ends as `rate_limited` (or `insufficient_credits`)
+  and nothing is spent.
+- **Checked early.** `POST /api/jobs` runs the same checks in its `INSERT … SELECT` and
+  answers `429` with `Retry-After` when the limit is used up (`402` when credits are short).
+  The studio shows how many headshots are left and when more free up.
+
 ## API routes
 
 | Route                 | Method | What it does                                                    |
 | --------------------- | ------ | --------------------------------------------------------------- |
 | `/api/auth/[...path]` | \*     | Neon Auth proxy                                                 |
 | `/api/checkout`       | POST   | `{ pack }` → Stripe Checkout URL                                |
-| `/api/credits`        | GET    | wallet (from the view) + purchases (from `stripe.charges`)      |
+| `/api/credits`        | GET    | wallet + daily usage (from the views) + purchases               |
 | `/api/jobs`           | GET    | `?cursor=` → 12 runs per page (+ stats on the first page)       |
 | `/api/jobs`           | POST   | `{ style, variants, contentType }` → job + presigned upload URL |
+|                       |        | (`402` not enough credits, `429` daily limit used up)           |
 | `/api/jobs/[id]`      | GET    | job + presigned download URLs once it succeeds                  |
 
 The functions are triggered by Neon, not called by the app:
@@ -84,9 +102,9 @@ Every query goes over Neon's HTTP driver, so the cost is round trips, not execut
 (all reads below run in well under a millisecond). The rules the code follows:
 
 - **One round trip per request.** Reads that belong together go in one `db.batch`: the
-  studio's first paint (wallet, purchases, runs, stats; `src/lib/dashboard.ts`),
+  studio's first paint (wallet, daily usage, purchases, runs, stats; `src/lib/dashboard.ts`),
   `/api/credits` and the first page of `/api/jobs`. `POST /api/jobs` checks the balance and
-  inserts in one `INSERT … SELECT` from the wallet view. The checkout customer lookup joins
+  the daily limit and inserts in one `INSERT … SELECT` from the two views. The checkout customer lookup joins
   `app.customers` to `stripe.customers` instead of querying them one after the other.
 - **Server-rendered first paint.** `/studio` renders with its data, so the browser doesn't
   call any API on load. It only polls while a checkout or a run is in flight.
@@ -96,8 +114,9 @@ Every query goes over Neon's HTTP driver, so the cost is round trips, not execut
   `drizzle/0005_stripe_lookup_indexes.sql` adds `(customer, created)` on `charges` and
   `checkout_sessions`, plus `prices.lookup_key` and `promotion_codes.code`. They change no
   data, but a full resync that recreates a table drops them: re-run that file. On `app.jobs`,
-  history pages use a backward scan of `(user_id, created_at, id)`, the wallet's spent side is
-  an index-only scan of a partial index, and the sweeper's indexes only cover in-flight jobs.
+  history pages use a backward scan of `(user_id, created_at, id)`, the wallet's spent side and
+  the 24-hour usage window are index-only scans of one partial index over counted runs, and
+  the sweeper's indexes only cover in-flight jobs.
 
 ## Setup
 
@@ -131,16 +150,23 @@ npm install
    npx neon deploy
    ```
 
+   `main` is a protected branch, so later deploys to it need `npx neon deploy --allow-protected`.
+
 4. **Stripe pipeline.** In the Stripe Dashboard, go to Data management → Pipelines →
    **Neon**. Authorize with OAuth, pick this project, and keep schema `stripe`. Enable at
-   least `customers`, `charges`, `payment_intents`, `refunds` and `disputes`.
+   least `customers`, `charges`, `payment_intents`, `checkout_sessions`, `prices` and
+   `promotion_codes`. Refunds and disputes are read from the flags on `charges`.
 
-5. **Migrate.** The view needs the `stripe` tables, so the script checks for them first:
+5. **Migrate.** The migrations in `drizzle/` are committed. The wallet view and the lookup
+   indexes need the `stripe` tables, so the script checks for them first:
 
    ```bash
-   npm run db:generate
    npm run db:migrate
    ```
+
+   After changing `src/db/schema/app.ts`, run `npm run db:generate` to write the next one.
+   Keep the `--> statement-breakpoint` markers between statements: the migrator splits on
+   them, and the HTTP driver runs one statement per query.
 
 6. **CORS** on the selfies bucket, so browsers can PUT to it:
 
@@ -175,8 +201,8 @@ npm install
 
 One page, `/auth`, built on Neon UI's `AuthForm`:
 
-- **Try the demo account** signs into one shared login. `DEMO_USERNAME` and `DEMO_PASSWORD`
-  live only on the server, and the account is created on first use.
+- **Try the demo account** signs into one shared login, `Phoenix` by default. `DEMO_USERNAME`
+  and `DEMO_PASSWORD` live only on the server, and the account is created on first use.
 - **Create an account** asks for name, username and password. **Sign in** asks for
   username and password.
 

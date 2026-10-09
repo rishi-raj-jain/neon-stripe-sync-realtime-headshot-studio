@@ -1,12 +1,12 @@
-CREATE SCHEMA "app";
+CREATE SCHEMA "app";--> statement-breakpoint
 
-CREATE TYPE "app"."job_status" AS ENUM('awaiting_upload', 'processing', 'succeeded', 'failed', 'insufficient_credits', 'expired');
+CREATE TYPE "app"."job_status" AS ENUM('awaiting_upload', 'processing', 'succeeded', 'failed', 'insufficient_credits', 'expired');--> statement-breakpoint
 CREATE TABLE "app"."customers" (
 	"user_id" uuid PRIMARY KEY NOT NULL,
 	"stripe_customer_id" text NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "customers_stripe_customer_id_unique" UNIQUE("stripe_customer_id")
-);
+);--> statement-breakpoint
 
 CREATE TABLE "app"."jobs" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
@@ -26,10 +26,10 @@ CREATE TABLE "app"."jobs" (
 	CONSTRAINT "jobs_input_key_unique" UNIQUE("input_key"),
 	CONSTRAINT "jobs_variants_check" CHECK ("app"."jobs"."variants" between 1 and 4),
 	CONSTRAINT "jobs_cost_check" CHECK ("app"."jobs"."cost" > 0)
-);
+);--> statement-breakpoint
 
-CREATE INDEX "jobs_user_created_idx" ON "app"."jobs" USING btree ("user_id","created_at" DESC NULLS LAST);
-CREATE INDEX "jobs_status_started_idx" ON "app"."jobs" USING btree ("status","started_at");
+CREATE INDEX "jobs_user_created_idx" ON "app"."jobs" USING btree ("user_id","created_at" DESC NULLS LAST);--> statement-breakpoint
+CREATE INDEX "jobs_status_started_idx" ON "app"."jobs" USING btree ("status","started_at");--> statement-breakpoint
 CREATE VIEW "app"."credit_balances" AS (
       with purchased as (
         select c.user_id,

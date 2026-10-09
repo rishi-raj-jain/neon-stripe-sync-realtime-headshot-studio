@@ -1,6 +1,6 @@
 import { getUser, unauthorized } from '@/lib/auth/server'
-import { getWallet } from '@/lib/credits'
-import { createJobIfAffordable, getRunsPage } from '@/lib/runs'
+import { getAllowance } from '@/lib/credits'
+import { createJobIfAllowed, getRunsPage } from '@/lib/runs'
 import { presignSelfieUpload } from '@/lib/storage'
 import { CREDITS_PER_VARIANT, MAX_VARIANTS, SELFIE_CONTENT_TYPES, STYLES, type SelfieContentType, type StyleId } from '@/shared/headshots'
 import * as v from 'valibot'
@@ -31,7 +31,9 @@ export async function GET(request: Request) {
  *
  * Creates the job row and returns a presigned PUT URL. The browser uploads the selfie
  * straight to Neon Object Storage, and that upload fires the `onupload` Neon Function.
- * Credits are only *checked* here. They're spent atomically when the function claims the job.
+ * Credits and the daily image limit (DAILY_IMAGE_LIMIT per rolling 24 hours) are only
+ * *checked* here: 402 when credits are short, 429 when the limit is used up. Both are enforced
+ * atomically when the function claims the job.
  */
 export async function POST(request: Request) {
   const user = await getUser()
@@ -44,10 +46,16 @@ export async function POST(request: Request) {
   const { style, variants, contentType } = parsed.output
   const cost = variants * CREDITS_PER_VARIANT
 
-  const job = await createJobIfAffordable({ userId: user.id, style, variants, cost, contentType })
+  const job = await createJobIfAllowed({ userId: user.id, style, variants, cost, contentType })
   if (!job) {
-    // Rare path: read the balance only to explain the refusal.
-    const wallet = await getWallet(user.id)
+    // Rare path: read the allowance only to explain the refusal. The limit comes first, since
+    // buying credits wouldn't get past it.
+    const { wallet, usage } = await getAllowance(user.id)
+    if (usage.remaining < variants) {
+      const retryAfter = usage.freesAt ? Math.max(1, Math.ceil((Date.parse(usage.freesAt) - Date.now()) / 1000)) : 60
+      const left = usage.remaining === 0 ? 'none left' : `${usage.remaining} left`
+      return Response.json({ error: `Daily limit: ${usage.limit} headshots per 24 hours, and you have ${left}.`, usage }, { status: 429, headers: { 'Retry-After': String(retryAfter) } })
+    }
     return Response.json({ error: `This needs ${cost} credits and you have ${wallet.balance}.` }, { status: 402 })
   }
 

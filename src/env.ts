@@ -19,7 +19,7 @@ const ServerEnv = v.object({
   STRIPE_SECRET_KEY: v.pipe(v.string(), v.regex(/^(sk|rk)_(test|live)_/, 'STRIPE_SECRET_KEY must be a secret or restricted key')),
   APP_URL: url,
   /** Shared demo login behind the "Try the demo account" button. Server-side only. */
-  DEMO_USERNAME: v.optional(v.pipe(v.string(), v.regex(/^[a-zA-Z0-9_.-]{3,30}$/)), 'demo'),
+  DEMO_USERNAME: v.optional(v.pipe(v.string(), v.regex(/^[a-zA-Z0-9_.-]{3,30}$/)), 'Phoenix'),
   DEMO_PASSWORD: v.optional(v.pipe(v.string(), v.minLength(8, 'DEMO_PASSWORD must be at least 8 characters'))),
   /** Prefilled in Stripe Checkout for the demo account (its login has no real email). */
   DEMO_EMAIL: v.optional(v.pipe(v.string(), v.email('DEMO_EMAIL must be an email address')), 'demo@example.com'),

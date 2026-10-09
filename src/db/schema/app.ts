@@ -17,6 +17,7 @@ export const jobStatus = app.enum('job_status', [
   'succeeded',
   'failed', // credits come back automatically (only processing/succeeded count as spent)
   'insufficient_credits',
+  'rate_limited', // claim refused: the daily image limit was already used up
   'expired', // never uploaded
 ])
 
@@ -60,9 +61,10 @@ export const jobs = app.table(
     // Run history: keyset pagination on (created_at, id) for one user. Ascending on purpose: a backward
     // scan serves ORDER BY created_at DESC, id DESC (DESC means NULLS FIRST, which a DESC NULLS LAST index can't).
     index('jobs_user_created_id_idx').on(t.userId, t.createdAt, t.id),
-    // Wallet "spent" side, read on every balance check: an index-only sum that skips failed/expired runs.
-    index('jobs_user_spent_idx')
-      .on(t.userId, t.cost)
+    // Runs that count (processing/succeeded), read on every balance and rate-limit check: the wallet's
+    // "spent" sum and the 24-hour usage window are both index-only scans of this.
+    index('jobs_user_counted_idx')
+      .on(t.userId, t.startedAt, t.cost, t.variants)
       .where(sql`${t.status} in ('processing', 'succeeded')`),
     // Sweeper: only in-flight jobs are indexed, so these stay tiny as history grows.
     index('jobs_processing_started_idx')
@@ -146,6 +148,27 @@ export const creditBalances = app
         left join purchased p on p.user_id = c.user_id
         left join free_orders f on f.user_id = c.user_id
         left join spent s on s.user_id = c.user_id
+    `,
+  )
+
+/**
+ * The rate limit's ledger: images each user started generating in the last 24 hours (rolling
+ * window). Same rule as the wallet: only processing/succeeded runs count, so a failed run gives
+ * its images back. A run's images free up 24 hours after it started, the oldest first.
+ */
+export const imageUsage24h = app
+  .view('image_usage_24h', {
+    userId: uuid('user_id').notNull(),
+    used: integer('used').notNull(),
+    oldestStartedAt: timestamp('oldest_started_at', { withTimezone: true }).notNull(),
+  })
+  .as(
+    sql`
+      select j.user_id, sum(j.variants)::int as used, min(j.started_at) as oldest_started_at
+        from app.jobs j
+       where j.status in ('processing', 'succeeded')
+         and j.started_at > now() - interval '24 hours'
+       group by j.user_id
     `,
   )
 

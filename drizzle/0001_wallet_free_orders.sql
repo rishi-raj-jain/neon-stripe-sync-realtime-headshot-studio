@@ -1,4 +1,4 @@
-DROP VIEW "app"."credit_balances";
+DROP VIEW "app"."credit_balances";--> statement-breakpoint
 CREATE VIEW "app"."credit_balances" AS (
       with purchased as (
         select c.user_id,

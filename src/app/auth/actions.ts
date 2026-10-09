@@ -65,7 +65,7 @@ export async function signInAsDemo(): Promise<AuthResult> {
   const signIn = await auth.signIn.email({ email, password: env.DEMO_PASSWORD })
   if (!signIn.error) redirect('/studio')
 
-  const signUp = await auth.signUp.email({ name: 'Demo user', email, password: env.DEMO_PASSWORD })
+  const signUp = await auth.signUp.email({ name: env.DEMO_USERNAME, email, password: env.DEMO_PASSWORD })
   if (signUp.error) return { error: 'The demo account is unavailable right now.' }
   redirect('/studio')
 }

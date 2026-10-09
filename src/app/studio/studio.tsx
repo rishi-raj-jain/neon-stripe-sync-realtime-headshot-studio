@@ -12,12 +12,14 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { UpgradeDialog } from '@/components/upgrade-dialog/upgrade-dialog'
-import { CREDIT_PACKS, CREDITS_PER_VARIANT, MAX_VARIANTS, SELFIE_CONTENT_TYPES, STYLES, type PackId, type StyleId } from '@/shared/headshots'
+import { CREDIT_PACKS, CREDITS_PER_VARIANT, DAILY_IMAGE_LIMIT, MAX_VARIANTS, SELFIE_CONTENT_TYPES, STYLES, type PackId, type StyleId } from '@/shared/headshots'
 import { useCallback, useEffect, useState } from 'react'
 
 type Wallet = { purchased: number; spent: number; balance: number }
 type Purchase = { id: string; amount: number; amountRefunded: number; currency: string; refunded: boolean; disputed: boolean; credits: number; created: number }
-type JobStatus = 'awaiting_upload' | 'processing' | 'succeeded' | 'failed' | 'insufficient_credits' | 'expired'
+/** The daily rate limit (rolling 24 hours). `freesAt`: when the oldest counted run ages out. */
+type Usage = { used: number; limit: number; remaining: number; freesAt: string | null }
+type JobStatus = 'awaiting_upload' | 'processing' | 'succeeded' | 'failed' | 'insufficient_credits' | 'rate_limited' | 'expired'
 /** What POST /api/jobs returns for a fresh job. */
 type Job = { id: string; style: StyleId; variants: number; cost: number; status: JobStatus; error: string | null; createdAt: string }
 /** A stored run from GET /api/jobs: the job plus what it used and produced (signed URLs). */
@@ -25,9 +27,12 @@ type Run = Job & { model: string | null; prompt: string | null; startedAt: strin
 type RunStats = { runs: number; succeeded: number; headshots: number; creditsSpent: number }
 type RunsPage = { runs: Run[]; nextCursor: string | null; stats?: RunStats }
 /** First paint, rendered on the server (src/lib/dashboard.ts). */
-type Dashboard = { wallet: Wallet; purchases: Purchase[]; runs: Run[]; nextCursor: string | null; stats: RunStats }
+type Dashboard = { wallet: Wallet; usage: Usage; purchases: Purchase[]; runs: Run[]; nextCursor: string | null; stats: RunStats }
 
 const pendingRun = (job: Job): Run => ({ ...job, model: null, prompt: null, startedAt: null, finishedAt: null, durationMs: null, inputUrl: null, images: [] })
+
+/** A run can't be bigger than the daily limit, so don't offer variant counts that could never pass. */
+const MAX_VARIANTS_PER_RUN = Math.min(MAX_VARIANTS, DAILY_IMAGE_LIMIT)
 
 const IN_FLIGHT: JobStatus[] = ['awaiting_upload', 'processing']
 
@@ -38,6 +43,7 @@ const JOB_STATUS: Record<JobStatus, { status: AppStatus; label: string }> = {
   succeeded: { status: 'ready', label: 'Ready' },
   failed: { status: 'error', label: 'Failed, credits returned' },
   insufficient_credits: { status: 'error', label: 'Not enough credits' },
+  rate_limited: { status: 'error', label: 'Daily limit reached' },
   expired: { status: 'stopped', label: 'Upload never arrived' },
 }
 
@@ -56,6 +62,7 @@ const dollars = (cents: number) => cents / 100
 
 export function Studio({ initial, returnedFromCheckout }: { initial: Dashboard; returnedFromCheckout: boolean }) {
   const [wallet, setWallet] = useState<Wallet | null>(initial.wallet)
+  const [usage, setUsage] = useState<Usage>(initial.usage)
   const [purchases, setPurchases] = useState<Purchase[]>(initial.purchases)
   const [runs, setRuns] = useState<Run[] | null>(initial.runs)
   const [stats, setStats] = useState<RunStats | null>(initial.stats)
@@ -66,8 +73,9 @@ export function Studio({ initial, returnedFromCheckout }: { initial: Dashboard; 
   const [error, setError] = useState<string | null>(null)
 
   const refreshCredits = useCallback(async () => {
-    const data = await api<{ wallet: Wallet; purchases: Purchase[] }>('/api/credits')
+    const data = await api<{ wallet: Wallet; usage: Usage; purchases: Purchase[] }>('/api/credits')
     setWallet(data.wallet)
+    setUsage(data.usage)
     setPurchases(data.purchases)
     return data.wallet
   }, [])
@@ -126,6 +134,9 @@ export function Studio({ initial, returnedFromCheckout }: { initial: Dashboard; 
 
   // While any run is in flight, poll runs and the wallet (spent credits move with them).
   const hasInFlight = (runs ?? []).some((run) => IN_FLIGHT.includes(run.status))
+  // Runs still uploading count toward the limit once claimed, so hold their images back here too.
+  const reserved = (runs ?? []).filter((run) => run.status === 'awaiting_upload').reduce((sum, run) => sum + run.variants, 0)
+  const imagesLeft = Math.max(0, usage.remaining - reserved)
   useEffect(() => {
     if (!hasInFlight) return
     const timer = setInterval(() => {
@@ -144,7 +155,14 @@ export function Studio({ initial, returnedFromCheckout }: { initial: Dashboard; 
       </div>
 
       <section className="flex min-w-0 flex-col gap-6 lg:col-start-2 lg:row-span-2 lg:row-start-1">
-        <UploadCard balance={wallet?.balance ?? 0} onCreated={(job) => setRuns((current) => [pendingRun(job), ...(current ?? [])])} onUploaded={() => refreshRuns()} onError={setError} />
+        <UploadCard
+          balance={wallet?.balance ?? 0}
+          imagesLeft={imagesLeft}
+          freesAt={usage.freesAt}
+          onCreated={(job) => setRuns((current) => [pendingRun(job), ...(current ?? [])])}
+          onUploaded={() => refreshRuns()}
+          onError={setError}
+        />
         {error && <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
@@ -254,7 +272,7 @@ function Packs({ wallet, onError }: { wallet: Wallet | null; onError: (message: 
             period: 'one-time',
             action: 'Continue to checkout',
             working: 'Opening checkout…',
-            features: [`${pack.credits} headshot credits`, 'All four styles', 'Up to 4 variants per selfie', 'Failed generations refund automatically'],
+            features: [`${pack.credits} headshot credits`, 'All four styles', `Up to ${MAX_VARIANTS_PER_RUN} variant${MAX_VARIANTS_PER_RUN === 1 ? '' : 's'} per selfie`, 'Failed generations refund automatically'],
           }}
         />
       )}
@@ -294,12 +312,13 @@ function Purchases({ purchases }: { purchases: Purchase[] }) {
   )
 }
 
-function UploadCard(props: { balance: number; onCreated: (job: Job) => void; onUploaded: () => void; onError: (message: string | null) => void }) {
+function UploadCard(props: { balance: number; imagesLeft: number; freesAt: string | null; onCreated: (job: Job) => void; onUploaded: () => void; onError: (message: string | null) => void }) {
   const [style, setStyle] = useState<StyleId>('corporate')
-  const [variants, setVariants] = useState(2)
+  const [variants, setVariants] = useState(Math.min(2, MAX_VARIANTS_PER_RUN))
   const [file, setFile] = useState<File | null>(null)
   const [busy, setBusy] = useState(false)
   const cost = variants * CREDITS_PER_VARIANT
+  const overLimit = variants > props.imagesLeft
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -327,7 +346,7 @@ function UploadCard(props: { balance: number; onCreated: (job: Job) => void; onU
   }
 
   const styleItems = (Object.keys(STYLES) as StyleId[]).map((id) => ({ value: id, label: STYLES[id].label }))
-  const variantItems = Array.from({ length: MAX_VARIANTS }, (_, i) => ({ value: String(i + 1), label: `${i + 1} variant${i ? 's' : ''}` }))
+  const variantItems = Array.from({ length: MAX_VARIANTS_PER_RUN }, (_, i) => ({ value: String(i + 1), label: `${i + 1} variant${i ? 's' : ''}` }))
 
   return (
     <Card>
@@ -371,9 +390,24 @@ function UploadCard(props: { balance: number; onCreated: (job: Job) => void; onU
               </SelectContent>
             </Select>
           </div>
-          <Button type="submit" size="lg" className="sm:col-span-2" disabled={!file || busy || props.balance < cost}>
-            {busy ? 'Uploading…' : props.balance < cost ? `Needs ${cost} credit${cost === 1 ? '' : 's'}` : `Generate · ${cost} credit${cost === 1 ? '' : 's'}`}
+          <Button type="submit" size="lg" className="sm:col-span-2" disabled={!file || busy || overLimit || props.balance < cost}>
+            {busy
+              ? 'Uploading…'
+              : overLimit
+                ? props.imagesLeft === 0
+                  ? 'Daily limit reached'
+                  : `Only ${props.imagesLeft} left today`
+                : props.balance < cost
+                  ? `Needs ${cost} credit${cost === 1 ? '' : 's'}`
+                  : `Generate · ${cost} credit${cost === 1 ? '' : 's'}`}
           </Button>
+          <p className="text-xs text-muted-foreground sm:col-span-2">
+            {props.imagesLeft} of {DAILY_IMAGE_LIMIT} headshots left today
+            {props.imagesLeft < DAILY_IMAGE_LIMIT && props.freesAt && (
+              // Local time differs between server and browser, so let the client's rendering win.
+              <span suppressHydrationWarning> · more from {new Date(props.freesAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+            )}
+          </p>
         </form>
       </CardContent>
     </Card>

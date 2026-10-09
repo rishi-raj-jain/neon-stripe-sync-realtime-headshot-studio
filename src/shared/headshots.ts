@@ -9,7 +9,12 @@ export const SELFIE_UPLOAD_PREFIX = 'uploads/'
 
 /** 1 credit = 1 generated headshot. */
 export const CREDITS_PER_VARIANT = 1
-export const MAX_VARIANTS = 4
+export const MAX_VARIANTS = 2
+/**
+ * Rate limit: headshots (variants) one user can generate in any rolling 24 hours. Enforced
+ * when `onupload` claims a job; failed runs don't count, like they don't cost credits.
+ */
+export const DAILY_IMAGE_LIMIT = 2
 export const MAX_SELFIE_BYTES = 10 * 1024 * 1024
 
 export const SELFIE_CONTENT_TYPES = {

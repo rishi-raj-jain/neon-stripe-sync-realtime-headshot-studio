@@ -1,11 +1,15 @@
 import 'server-only'
 
 import { db } from '@/db/client'
-import { creditBalances, customers } from '@/db/schema/app'
+import { creditBalances, customers, imageUsage24h } from '@/db/schema/app'
 import { stripeCharges, stripeCheckoutSessions, stripePaymentIntents } from '@/db/schema/stripe'
+import { DAILY_IMAGE_LIMIT } from '@/shared/headshots'
 import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 
 type Wallet = { purchased: number; spent: number; balance: number }
+
+/** The daily rate limit. `freesAt`: when the oldest counted run ages out of the 24-hour window. */
+type Usage = { used: number; limit: number; remaining: number; freesAt: string | null }
 
 type Purchase = {
   id: string
@@ -36,6 +40,18 @@ const walletQuery = (userId: string) =>
     .from(creditBalances)
     .where(eq(creditBalances.userId, userId))
     .limit(1)
+
+const usageQuery = (userId: string) => db.select({ used: imageUsage24h.used, oldestStartedAt: imageUsage24h.oldestStartedAt }).from(imageUsage24h).where(eq(imageUsage24h.userId, userId)).limit(1)
+
+function toUsage([row]: Awaited<ReturnType<typeof usageQuery>>): Usage {
+  const used = row?.used ?? 0
+  return {
+    used,
+    limit: DAILY_IMAGE_LIMIT,
+    remaining: Math.max(0, DAILY_IMAGE_LIMIT - used),
+    freesAt: row ? new Date(row.oldestStartedAt.getTime() + 24 * 60 * 60 * 1000).toISOString() : null,
+  }
+}
 
 /** Paid orders: charges (same rules as the view). */
 const chargesQuery = (userId: string) =>
@@ -81,12 +97,12 @@ const freeOrdersQuery = (userId: string) =>
     .orderBy(desc(stripeCheckoutSessions.created))
     .limit(PURCHASES_SHOWN)
 
-/** Wallet + purchase history, ready to spread into a `db.batch`. Pair with `toCredits`. */
-export const creditQueries = (userId: string) => [walletQuery(userId), chargesQuery(userId), freeOrdersQuery(userId)] as const
+/** Wallet, daily usage and purchase history, ready to spread into a `db.batch`. Pair with `toCredits`. */
+export const creditQueries = (userId: string) => [walletQuery(userId), usageQuery(userId), chargesQuery(userId), freeOrdersQuery(userId)] as const
 
-type CreditRows = readonly [Awaited<ReturnType<typeof walletQuery>>, Awaited<ReturnType<typeof chargesQuery>>, Awaited<ReturnType<typeof freeOrdersQuery>>]
+type CreditRows = readonly [Awaited<ReturnType<typeof walletQuery>>, Awaited<ReturnType<typeof usageQuery>>, Awaited<ReturnType<typeof chargesQuery>>, Awaited<ReturnType<typeof freeOrdersQuery>>]
 
-export function toCredits([walletRows, charges, freeOrders]: CreditRows): { wallet: Wallet; purchases: Purchase[] } {
+export function toCredits([walletRows, usageRows, charges, freeOrders]: CreditRows): { wallet: Wallet; usage: Usage; purchases: Purchase[] } {
   const purchases: Purchase[] = [
     ...charges.map((c) => ({
       id: c.id,
@@ -112,16 +128,18 @@ export function toCredits([walletRows, charges, freeOrders]: CreditRows): { wall
   return {
     // No row = never started a checkout, so there is nothing to spend.
     wallet: walletRows[0] ?? EMPTY_WALLET,
+    usage: toUsage(usageRows),
     purchases: purchases.sort((a, b) => b.created - a.created).slice(0, PURCHASES_SHOWN),
   }
 }
 
-/** Wallet and purchase history in one round trip. */
+/** Wallet, daily usage and purchase history in one round trip. */
 export async function getCredits(userId: string) {
   return toCredits(await db.batch(creditQueries(userId)))
 }
 
-export async function getWallet(userId: string): Promise<Wallet> {
-  const [row] = await walletQuery(userId)
-  return row ?? EMPTY_WALLET
+/** What a new run is checked against: credits and the daily limit, in one round trip. */
+export async function getAllowance(userId: string): Promise<{ wallet: Wallet; usage: Usage }> {
+  const [walletRows, usageRows] = await db.batch([walletQuery(userId), usageQuery(userId)])
+  return { wallet: walletRows[0] ?? EMPTY_WALLET, usage: toUsage(usageRows) }
 }

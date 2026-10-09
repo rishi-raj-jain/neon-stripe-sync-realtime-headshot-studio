@@ -1,9 +1,9 @@
 import 'server-only'
 
 import { db } from '@/db/client'
-import { creditBalances, jobs, type Job } from '@/db/schema/app'
+import { creditBalances, imageUsage24h, jobs, type Job } from '@/db/schema/app'
 import { presignHeadshotDownload, presignSelfieDownload } from '@/lib/storage'
-import { selfieKey, type SelfieContentType, type StyleId } from '@/shared/headshots'
+import { DAILY_IMAGE_LIMIT, selfieKey, type SelfieContentType, type StyleId } from '@/shared/headshots'
 import { and, desc, eq, gte, sql } from 'drizzle-orm'
 
 /** Only what the dashboard shows (no user_id, invocation_id, content type). */
@@ -41,7 +41,7 @@ type Run = Omit<RunRow, 'inputKey' | 'outputKeys' | 'createdAt' | 'startedAt' | 
 const RUNS_PAGE_SIZE = 12
 
 /** Selfies exist once the upload landed; never-uploaded runs have nothing to show. */
-const HAS_SELFIE: Job['status'][] = ['processing', 'succeeded', 'failed', 'insufficient_credits']
+const HAS_SELFIE: Job['status'][] = ['processing', 'succeeded', 'failed', 'insufficient_credits', 'rate_limited']
 
 export async function toRun({ inputKey, outputKeys, createdAt, startedAt, finishedAt, ...job }: RunRow): Promise<Run> {
   const [inputUrl, images] = await Promise.all([HAS_SELFIE.includes(job.status) ? presignSelfieDownload(inputKey) : null, job.status === 'succeeded' ? Promise.all(outputKeys.map(presignHeadshotDownload)) : []])
@@ -105,15 +105,16 @@ export async function getRunsPage(userId: string, cursor?: string | null) {
 type NewJob = { userId: string; style: StyleId; variants: number; cost: number; contentType: SelfieContentType }
 
 /**
- * Creates a job only if the wallet covers its cost: INSERT … SELECT from the wallet view, so the
- * check and the insert are one statement and one round trip. Null means not enough credits.
- * (This is only a pre-check. Credits are spent when `onupload` claims the job.)
+ * Creates a job only if the wallet covers its cost and the daily image limit has room for it:
+ * INSERT … SELECT from the wallet and usage views, so the checks and the insert are one
+ * statement and one round trip. Null means one of the checks failed.
+ * (Only a pre-check. Both are enforced for real when `onupload` claims the job.)
  */
-export async function createJobIfAffordable({ userId, style, variants, cost, contentType }: NewJob) {
+export async function createJobIfAllowed({ userId, style, variants, cost, contentType }: NewJob) {
   const id = crypto.randomUUID()
   const inputKey = selfieKey(userId, id, contentType)
 
-  // Insert-select needs every column, in table order. The row only exists if the balance covers `cost`.
+  // Insert-select needs every column, in table order. The row only exists if both checks pass.
   const [job] = await db
     .insert(jobs)
     .select(
@@ -137,7 +138,8 @@ export async function createJobIfAffordable({ userId, style, variants, cost, con
           finishedAt: sql`null::timestamptz`.as('finished_at'),
         })
         .from(creditBalances)
-        .where(and(eq(creditBalances.userId, userId), gte(creditBalances.balance, cost))),
+        .leftJoin(imageUsage24h, eq(imageUsage24h.userId, creditBalances.userId))
+        .where(and(eq(creditBalances.userId, userId), gte(creditBalances.balance, cost), sql`coalesce(${imageUsage24h.used}, 0) + ${variants} <= ${DAILY_IMAGE_LIMIT}`)),
     )
     .returning({ id: jobs.id, style: jobs.style, variants: jobs.variants, cost: jobs.cost, status: jobs.status, error: jobs.error, inputKey: jobs.inputKey, createdAt: jobs.createdAt })
 
