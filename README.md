@@ -103,7 +103,7 @@ Every query goes over Neon's HTTP driver, so the cost is round trips, not execut
 
 You need:
 
-- Node 22.18+ (Neon Functions run on Node 24).
+- Node 24+ (the same version Neon Functions run on).
 - A **paid** Neon plan with AI Gateway credits.
 - Stripe real-time sync preview access ([request it here](https://docs.stripe.com/data/data-pipeline/real-time-sync-to-postgres)).
 
