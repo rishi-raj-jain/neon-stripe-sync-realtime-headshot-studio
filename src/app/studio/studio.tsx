@@ -24,6 +24,8 @@ type Job = { id: string; style: StyleId; variants: number; cost: number; status:
 type Run = Job & { model: string | null; prompt: string | null; startedAt: string | null; finishedAt: string | null; durationMs: number | null; inputUrl: string | null; images: string[] }
 type RunStats = { runs: number; succeeded: number; headshots: number; creditsSpent: number }
 type RunsPage = { runs: Run[]; nextCursor: string | null; stats?: RunStats }
+/** First paint, rendered on the server (src/lib/dashboard.ts). */
+type Dashboard = { wallet: Wallet; purchases: Purchase[]; runs: Run[]; nextCursor: string | null; stats: RunStats }
 
 const pendingRun = (job: Job): Run => ({ ...job, model: null, prompt: null, startedAt: null, finishedAt: null, durationMs: null, inputUrl: null, images: [] })
 
@@ -52,12 +54,12 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 const dollars = (cents: number) => cents / 100
 
-export function Studio({ returnedFromCheckout }: { returnedFromCheckout: boolean }) {
-  const [wallet, setWallet] = useState<Wallet | null>(null)
-  const [purchases, setPurchases] = useState<Purchase[]>([])
-  const [runs, setRuns] = useState<Run[] | null>(null)
-  const [stats, setStats] = useState<RunStats | null>(null)
-  const [nextCursor, setNextCursor] = useState<string | null>(null)
+export function Studio({ initial, returnedFromCheckout }: { initial: Dashboard; returnedFromCheckout: boolean }) {
+  const [wallet, setWallet] = useState<Wallet | null>(initial.wallet)
+  const [purchases, setPurchases] = useState<Purchase[]>(initial.purchases)
+  const [runs, setRuns] = useState<Run[] | null>(initial.runs)
+  const [stats, setStats] = useState<RunStats | null>(initial.stats)
+  const [nextCursor, setNextCursor] = useState<string | null>(initial.nextCursor)
   const [loadingMore, setLoadingMore] = useState(false)
   const [awaitingPayment, setAwaitingPayment] = useState(returnedFromCheckout)
   const [waitingLong, setWaitingLong] = useState(false)
@@ -100,11 +102,6 @@ export function Studio({ returnedFromCheckout }: { returnedFromCheckout: boolean
       setLoadingMore(false)
     }
   }
-
-  useEffect(() => {
-    refreshCredits().catch((e: Error) => setError(e.message))
-    refreshRuns().catch((e: Error) => setError(e.message))
-  }, [refreshCredits, refreshRuns])
 
   // Back from Checkout: no webhook to wait on. Poll the wallet view until the synced purchase lands.
   useEffect(() => {

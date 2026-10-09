@@ -7,6 +7,7 @@ import { env } from '@/env'
 import type { SessionUser } from '@/lib/auth/server'
 import { isPlaceholderEmail, usernameToEmail } from '@/lib/auth/username'
 import { and, desc, eq } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/pg-core'
 import Stripe from 'stripe'
 
 /**
@@ -25,12 +26,22 @@ export const stripe = new Stripe(env.STRIPE_SECRET_KEY, {
  * A stored id is re-checked against the *current* Stripe account, so switching keys (live →
  * sandbox, or another account) heals itself: an unknown id is replaced by a fresh customer.
  */
+/** app.customers and stripe.customers share a table name, so the join needs an alias. */
+const syncedCustomers = alias(stripeCustomers, 'synced_customers')
+
 export async function ensureStripeCustomer(user: SessionUser): Promise<string> {
   const email = billingEmail(user)
-  const [existing] = await db.select({ id: customers.stripeCustomerId }).from(customers).where(eq(customers.userId, user.id)).limit(1)
+  // Our mapping and its synced Stripe row in one round trip.
+  const [existing] = await db
+    .select({ id: customers.stripeCustomerId, syncedId: syncedCustomers.id, syncedEmail: syncedCustomers.email })
+    .from(customers)
+    .leftJoin(syncedCustomers, eq(syncedCustomers.id, customers.stripeCustomerId))
+    .where(eq(customers.userId, user.id))
+    .limit(1)
 
   if (existing) {
-    const current = await findCustomer(existing.id)
+    // The pipeline only syncs the current account, so a synced row settles it without an API call.
+    const current = existing.syncedId ? { email: existing.syncedEmail } : await retrieveCustomer(existing.id)
     if (current) {
       // Keep the email Checkout prefills in step (e.g. DEMO_EMAIL changed, or set after creation).
       if (email && current.email !== email) await stripe.customers.update(existing.id, { email })
@@ -63,12 +74,8 @@ function billingEmail(user: SessionUser): string | undefined {
   return isPlaceholderEmail(user.email) ? undefined : user.email
 }
 
-/** The customer in the Stripe account the current key belongs to, or null if it isn't there. */
-async function findCustomer(id: string): Promise<{ email: string | null } | null> {
-  // The pipeline only syncs the current account, so a synced row settles it without an API call.
-  const [synced] = await db.select({ email: stripeCustomers.email }).from(stripeCustomers).where(eq(stripeCustomers.id, id)).limit(1)
-  if (synced) return synced
-
+/** Not synced yet (or from another account): ask Stripe. Null if it isn't in this account. */
+async function retrieveCustomer(id: string): Promise<{ email: string | null } | null> {
   try {
     const customer = await stripe.customers.retrieve(id)
     return 'deleted' in customer && customer.deleted ? null : { email: customer.email }

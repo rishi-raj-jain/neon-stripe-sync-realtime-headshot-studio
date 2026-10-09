@@ -1,7 +1,7 @@
 import { db } from '@/db/client'
 import { jobs } from '@/db/schema/app'
 import { getUser, unauthorized } from '@/lib/auth/server'
-import { toRun } from '@/lib/runs'
+import { runColumns, toRun } from '@/lib/runs'
 import { and, eq } from 'drizzle-orm'
 import * as v from 'valibot'
 
@@ -16,7 +16,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   if (!id.success) return Response.json({ error: 'not found' }, { status: 404 })
 
   const [job] = await db
-    .select()
+    .select(runColumns)
     .from(jobs)
     .where(and(eq(jobs.id, id.output), eq(jobs.userId, user.id)))
     .limit(1)

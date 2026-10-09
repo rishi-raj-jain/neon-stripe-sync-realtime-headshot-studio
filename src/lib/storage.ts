@@ -14,6 +14,8 @@ const storage = createObjectStorage({
 
 const UPLOAD_TTL_SECONDS = 5 * 60
 const DOWNLOAD_TTL_SECONDS = 10 * 60
+/** Download URLs repeat for this long, so the dashboard's polling doesn't refetch images. */
+const DOWNLOAD_URL_STABLE_SECONDS = 5 * 60
 
 /** Presigned PUT for the browser. The object landing in the bucket fires `onupload`. */
 export async function presignSelfieUpload(key: string, contentType: SelfieContentType) {
@@ -22,10 +24,10 @@ export async function presignSelfieUpload(key: string, contentType: SelfieConten
 }
 
 export function presignHeadshotDownload(key: string) {
-  return storage.presign('GET', BUCKETS.headshots, key, DOWNLOAD_TTL_SECONDS)
+  return storage.presign('GET', BUCKETS.headshots, key, DOWNLOAD_TTL_SECONDS, DOWNLOAD_URL_STABLE_SECONDS)
 }
 
 /** Short-lived view URL for the selfie a run started from (shown next to its results). */
 export function presignSelfieDownload(key: string) {
-  return storage.presign('GET', BUCKETS.selfies, key, DOWNLOAD_TTL_SECONDS)
+  return storage.presign('GET', BUCKETS.selfies, key, DOWNLOAD_TTL_SECONDS, DOWNLOAD_URL_STABLE_SECONDS)
 }

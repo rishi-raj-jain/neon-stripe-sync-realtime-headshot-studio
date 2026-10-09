@@ -57,9 +57,10 @@ In the account you switch to:
   lookup key and code, so no ids live in the code.
 - **Customers:** nothing to do. `ensureStripeCustomer` re-checks each stored customer id
   against the current account and creates a fresh customer when the id is unknown there.
-- **Wallet view:** if you drop the `stripe` schema, `CASCADE` also drops
-  `app.credit_balances`. Re-create it from `drizzle/0001_wallet_free_orders.sql` once the
-  pipeline has synced again.
+- **Wallet view and indexes:** if you drop the `stripe` schema, `CASCADE` also drops
+  `app.credit_balances` and the lookup indexes. Once the pipeline has synced again, re-run
+  `drizzle/0003_free_orders_paid_status.sql` (the view) and
+  `drizzle/0005_stripe_lookup_indexes.sql` (the indexes).
 
 ## API routes
 
@@ -68,7 +69,7 @@ In the account you switch to:
 | `/api/auth/[...path]` | \*     | Neon Auth proxy                                                 |
 | `/api/checkout`       | POST   | `{ pack }` → Stripe Checkout URL                                |
 | `/api/credits`        | GET    | wallet (from the view) + purchases (from `stripe.charges`)      |
-| `/api/jobs`           | GET    | your 20 latest jobs                                             |
+| `/api/jobs`           | GET    | `?cursor=` → 12 runs per page (+ stats on the first page)       |
 | `/api/jobs`           | POST   | `{ style, variants, contentType }` → job + presigned upload URL |
 | `/api/jobs/[id]`      | GET    | job + presigned download URLs once it succeeds                  |
 
@@ -76,6 +77,27 @@ The functions are triggered by Neon, not called by the app:
 
 - `functions/onupload.ts` fires on `storage_object_created` in `selfies/uploads/`.
 - `functions/sweeper.ts` runs on the `*/5 * * * *` schedule.
+
+## Query performance
+
+Every query goes over Neon's HTTP driver, so the cost is round trips, not execution time
+(all reads below run in well under a millisecond). The rules the code follows:
+
+- **One round trip per request.** Reads that belong together go in one `db.batch`: the
+  studio's first paint (wallet, purchases, runs, stats; `src/lib/dashboard.ts`),
+  `/api/credits` and the first page of `/api/jobs`. `POST /api/jobs` checks the balance and
+  inserts in one `INSERT … SELECT` from the wallet view. The checkout customer lookup joins
+  `app.customers` to `stripe.customers` instead of querying them one after the other.
+- **Server-rendered first paint.** `/studio` renders with its data, so the browser doesn't
+  call any API on load. It only polls while a checkout or a run is in flight.
+- **Stable signed URLs.** Download URLs are signed against a 5-minute window, so polling
+  returns the same URL and the browser doesn't re-download images every 2.5 s.
+- **Indexes.** The Stripe pipeline only creates primary keys and `_updated_at` indexes, so
+  `drizzle/0005_stripe_lookup_indexes.sql` adds `(customer, created)` on `charges` and
+  `checkout_sessions`, plus `prices.lookup_key` and `promotion_codes.code`. They change no
+  data, but a full resync that recreates a table drops them: re-run that file. On `app.jobs`,
+  history pages use a backward scan of `(user_id, created_at, id)`, the wallet's spent side is
+  an index-only scan of a partial index, and the sweeper's indexes only cover in-flight jobs.
 
 ## Setup
 

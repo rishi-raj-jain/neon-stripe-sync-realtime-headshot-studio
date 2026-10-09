@@ -66,25 +66,22 @@ export function createObjectStorage(config: ObjectStorageConfig) {
   return {
     request,
 
-    /** Presigned URL (query-string SigV4). Content-Type is not part of the signature. */
-    async presign(method: 'GET' | 'PUT', bucket: string, key: string, expiresInSeconds: number) {
-      const url = objectUrl(bucket, key, { 'X-Amz-Expires': String(expiresInSeconds) })
-      const signed = await client.sign(url, { method, aws: { signQuery: true } })
+    /**
+     * Presigned URL (query-string SigV4). Content-Type is not part of the signature.
+     *
+     * With `stableForSeconds`, the signing time is rounded down to that window and the expiry
+     * stretched by it, so every call inside the window returns the *same* URL (still valid for
+     * at least `expiresInSeconds`). A polling UI then keeps its <img src> and the browser
+     * reuses the image instead of downloading it again on every poll.
+     */
+    async presign(method: 'GET' | 'PUT', bucket: string, key: string, expiresInSeconds: number, stableForSeconds = 0) {
+      const windowMs = stableForSeconds * 1000
+      const signedAt = windowMs ? Math.floor(Date.now() / windowMs) * windowMs : Date.now()
+      const url = objectUrl(bucket, key, { 'X-Amz-Expires': String(expiresInSeconds + stableForSeconds) })
+      // SigV4 datetime: YYYYMMDDTHHMMSSZ
+      const datetime = new Date(signedAt).toISOString().replace(/[:-]|\.\d{3}/g, '')
+      const signed = await client.sign(url, { method, aws: { signQuery: true, datetime } })
       return signed.url
-    },
-
-    async size(bucket: string, key: string) {
-      const response = await request(bucket, key, { method: 'HEAD' })
-      return Number(response.headers.get('content-length') ?? 0)
-    },
-
-    async get(bucket: string, key: string) {
-      const response = await request(bucket, key, { method: 'GET' })
-      return new Uint8Array(await response.arrayBuffer())
-    },
-
-    async put(bucket: string, key: string, body: string | Uint8Array, contentType: string) {
-      await request(bucket, key, { method: 'PUT', body, headers: { 'Content-Type': contentType } })
     },
   }
 }

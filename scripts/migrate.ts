@@ -10,8 +10,8 @@ import * as v from 'valibot'
  * (unpooled) connection. App code uses the pooled DATABASE_URL; schema work never does.
  * Runs against whatever branch `.env` points at: `neon checkout <branch>` switches it.
  *
- * The migration that creates app.credit_balances reads stripe.charges and
- * stripe.payment_intents, so connect the Stripe pipeline before running this.
+ * The wallet view and the lookup indexes need the Stripe-synced tables, so connect the
+ * Stripe pipeline before running this.
  */
 const env = v.parse(
   v.object({
@@ -22,18 +22,21 @@ const env = v.parse(
 )
 
 const sql = neon(env.DATABASE_URL_UNPOOLED)
+const STRIPE_TABLES = ['charges', 'payment_intents', 'checkout_sessions', 'prices', 'promotion_codes']
 
 const [{ exists: stripeSynced }] = (await sql`
   select exists (
     select 1 from information_schema.tables
-     where table_schema = 'stripe' and table_name in ('charges', 'payment_intents')
-     group by table_schema having count(*) = 2
+     where table_schema = 'stripe' and table_name = any(${STRIPE_TABLES})
+     group by table_schema having count(*) = ${STRIPE_TABLES.length}
   ) as exists
 `) as [{ exists: boolean }]
 
 if (!stripeSynced) {
   console.error(
-    'stripe.charges / stripe.payment_intents not found.\n' + 'Connect Stripe → Data management → Pipelines → Neon, enable those tables, wait for the\n' + 'backfill to start, then re-run. (Schema name must be `stripe`.)',
+    `Missing Stripe-synced tables (need stripe.${STRIPE_TABLES.join(', stripe.')}).\n` +
+      'Connect Stripe → Data management → Pipelines → Neon, enable those tables, wait for the\n' +
+      'backfill to start, then re-run. (Schema name must be `stripe`.)',
   )
   process.exit(1)
 }

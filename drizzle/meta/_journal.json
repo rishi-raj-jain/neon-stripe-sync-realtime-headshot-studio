@@ -29,6 +29,20 @@
       "when": 1791509573195,
       "tag": "0003_free_orders_paid_status",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791519596400,
+      "tag": "0004_job_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791519596992,
+      "tag": "0005_stripe_lookup_indexes",
+      "breakpoints": true
     }
   ]
 }

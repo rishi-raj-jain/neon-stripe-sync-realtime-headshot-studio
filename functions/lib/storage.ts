@@ -9,14 +9,20 @@ const storage = createObjectStorage({
   region: env.AWS_REGION,
 })
 
-export function objectSize(bucket: string, key: string): Promise<number> {
-  return storage.size(bucket, key)
+/**
+ * The object's bytes, or null if it is over `maxBytes`. One GET: the size is checked from
+ * Content-Length before the body is read (and again after, in case it was missing).
+ */
+export async function readObject(bucket: string, key: string, maxBytes: number): Promise<Buffer | null> {
+  const response = await storage.request(bucket, key, { method: 'GET' })
+  if (Number(response.headers.get('content-length') ?? 0) > maxBytes) {
+    await response.body?.cancel()
+    return null
+  }
+  const body = Buffer.from(await response.arrayBuffer())
+  return body.length > maxBytes ? null : body
 }
 
-export async function readObject(bucket: string, key: string): Promise<Buffer> {
-  return Buffer.from(await storage.get(bucket, key))
-}
-
-export function writeObject(bucket: string, key: string, body: Buffer, contentType: string) {
-  return storage.put(bucket, key, body, contentType)
+export async function writeObject(bucket: string, key: string, body: Buffer, contentType: string) {
+  await storage.request(bucket, key, { method: 'PUT', body, headers: { 'Content-Type': contentType } })
 }

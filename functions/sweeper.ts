@@ -26,21 +26,23 @@ app.post('/', async (c) => {
   const { invocation } = delivery
   if (invocation.trigger.type !== 'schedule') return c.json({ error: 'expected schedule' }, 400)
 
-  const failed = await db
-    .update(jobs)
-    .set({
-      status: 'failed',
-      error: 'Generation timed out. Your credits were returned.',
-      finishedAt: new Date(),
-    })
-    .where(and(eq(jobs.status, 'processing'), lt(jobs.startedAt, STUCK_AFTER)))
-    .returning({ id: jobs.id })
-
-  const expired = await db
-    .update(jobs)
-    .set({ status: 'expired', finishedAt: new Date() })
-    .where(and(eq(jobs.status, 'awaiting_upload'), lt(jobs.createdAt, ABANDONED_AFTER)))
-    .returning({ id: jobs.id })
+  // Both sweeps in one round trip (and one transaction).
+  const [failed, expired] = await db.batch([
+    db
+      .update(jobs)
+      .set({
+        status: 'failed',
+        error: 'Generation timed out. Your credits were returned.',
+        finishedAt: new Date(),
+      })
+      .where(and(eq(jobs.status, 'processing'), lt(jobs.startedAt, STUCK_AFTER)))
+      .returning({ id: jobs.id }),
+    db
+      .update(jobs)
+      .set({ status: 'expired', finishedAt: new Date() })
+      .where(and(eq(jobs.status, 'awaiting_upload'), lt(jobs.createdAt, ABANDONED_AFTER)))
+      .returning({ id: jobs.id }),
+  ])
 
   console.log(
     `[sweeper] branch=${env.NEON_BRANCH} invocation=${invocation.invocationId} ` +

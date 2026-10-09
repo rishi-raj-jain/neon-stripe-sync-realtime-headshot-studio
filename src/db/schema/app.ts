@@ -1,5 +1,7 @@
 import { sql } from 'drizzle-orm'
 import { check, index, integer, pgSchema, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core'
+// Type-only, so drizzle-kit and the function bundles never have to resolve the alias.
+import type { StyleId } from '@/shared/headshots'
 
 /**
  * Everything this app owns lives in the `app` schema. The database has three owners:
@@ -34,7 +36,7 @@ export const jobs = app.table(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     userId: uuid('user_id').notNull(),
-    style: text('style').notNull(),
+    style: text('style').$type<StyleId>().notNull(),
     variants: smallint('variants').notNull(),
     cost: integer('cost').notNull(),
     status: jobStatus('status').notNull().default('awaiting_upload'),
@@ -55,8 +57,20 @@ export const jobs = app.table(
     finishedAt: timestamp('finished_at', { withTimezone: true }),
   },
   (t) => [
-    index('jobs_user_created_idx').on(t.userId, t.createdAt.desc()),
-    index('jobs_status_started_idx').on(t.status, t.startedAt),
+    // Run history: keyset pagination on (created_at, id) for one user. Ascending on purpose: a backward
+    // scan serves ORDER BY created_at DESC, id DESC (DESC means NULLS FIRST, which a DESC NULLS LAST index can't).
+    index('jobs_user_created_id_idx').on(t.userId, t.createdAt, t.id),
+    // Wallet "spent" side, read on every balance check: an index-only sum that skips failed/expired runs.
+    index('jobs_user_spent_idx')
+      .on(t.userId, t.cost)
+      .where(sql`${t.status} in ('processing', 'succeeded')`),
+    // Sweeper: only in-flight jobs are indexed, so these stay tiny as history grows.
+    index('jobs_processing_started_idx')
+      .on(t.startedAt)
+      .where(sql`${t.status} = 'processing'`),
+    index('jobs_awaiting_created_idx')
+      .on(t.createdAt)
+      .where(sql`${t.status} = 'awaiting_upload'`),
     check('jobs_variants_check', sql`${t.variants} between 1 and 4`),
     check('jobs_cost_check', sql`${t.cost} > 0`),
   ],

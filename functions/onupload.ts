@@ -7,7 +7,7 @@ import { db, sql } from '@functions/lib/db'
 import { env } from '@functions/lib/env'
 import { generateHeadshot } from '@functions/lib/generate'
 import { sniffImage } from '@functions/lib/image'
-import { objectSize, readObject, writeObject } from '@functions/lib/storage'
+import { readObject, writeObject } from '@functions/lib/storage'
 
 /**
  * Fires on every object created under selfies/uploads/ (see `neon.ts`).
@@ -117,20 +117,18 @@ async function claim(userId: string, jobId: string, inputKey: string, invocation
 async function generate(userId: string, job: ClaimedJob, bucket: string, key: string): Promise<string[]> {
   if (!(job.style in STYLES)) throw new UserFacingError(`Unknown style "${job.style}".`)
 
-  if ((await objectSize(bucket, key)) > MAX_SELFIE_BYTES) {
-    throw new UserFacingError('That photo is over 10 MB. Try a smaller one.')
-  }
+  const prompt = buildPrompt(job.style as StyleId)
+  // Keep the exact prompt with the run (history shows what produced each result), written
+  // while the selfie downloads rather than after it.
+  const [selfie] = await Promise.all([readObject(bucket, key, MAX_SELFIE_BYTES), db.update(jobs).set({ prompt }).where(eq(jobs.id, job.id))])
+  if (!selfie) throw new UserFacingError('That photo is over 10 MB. Try a smaller one.')
 
-  const selfie = await readObject(bucket, key)
   const kind = sniffImage(selfie)
   if (kind === 'image/heic') {
     throw new UserFacingError("That's an iPhone HEIC photo. Export it as JPEG and try again.")
   }
   if (kind === 'unknown') throw new UserFacingError("That file doesn't look like a photo.")
 
-  const prompt = buildPrompt(job.style as StyleId)
-  // Keep the exact prompt with the run, so history shows what produced each result.
-  await db.update(jobs).set({ prompt }).where(eq(jobs.id, job.id))
   return Promise.all(
     Array.from({ length: job.variants }, async (_, index) => {
       const image = await generateHeadshot({ selfie, mimeType: kind, prompt })
