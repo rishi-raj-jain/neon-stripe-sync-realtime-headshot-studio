@@ -1,5 +1,6 @@
 import { AppLogo, GitHubIcon, NeonLogo, StripeLogo } from '@/components/brand/logos'
 import { buttonVariants } from '@/components/ui/button'
+import { env } from '@/env'
 import { SITE } from '@/shared/site'
 import type { Metadata } from 'next'
 import { Google_Sans } from 'next/font/google'
@@ -9,9 +10,13 @@ import './globals.css'
 // next/font has no fallback metrics for Google Sans yet, so name the system fallback explicitly.
 const googleSans = Google_Sans({ subsets: ['latin'], variable: '--font-google-sans', display: 'swap', adjustFontFallback: false, fallback: ['ui-sans-serif', 'system-ui', 'sans-serif'] })
 
+// The social card is the pre-rendered src/app/opengraph-image.png (npm run og), which Next
+// serves as og:image by file convention. X falls back to it for twitter:image.
 export const metadata: Metadata = {
+  metadataBase: new URL(env.APP_URL),
   title: SITE.name,
   description: 'AI headshots on Neon + Stripe, with no webhooks.',
+  twitter: { card: 'summary_large_image' },
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

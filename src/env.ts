@@ -1,5 +1,6 @@
 import 'server-only'
 
+import { httpsUrl } from '@/shared/https'
 import * as v from 'valibot'
 
 /**
@@ -12,12 +13,15 @@ import * as v from 'valibot'
 const url = v.pipe(v.string(), v.url())
 const nonEmpty = v.pipe(v.string(), v.minLength(1))
 
+// Everything the app talks to is https. DATABASE_URL is postgresql://, but the Neon serverless
+// driver always sends queries over HTTPS (fetch), so there is no plaintext path to Postgres.
 const ServerEnv = v.object({
   DATABASE_URL: url,
-  NEON_AUTH_BASE_URL: url,
+  NEON_AUTH_BASE_URL: httpsUrl(),
   NEON_AUTH_COOKIE_SECRET: v.pipe(v.string(), v.minLength(32, 'NEON_AUTH_COOKIE_SECRET must be at least 32 chars (openssl rand -base64 32)')),
   STRIPE_SECRET_KEY: v.pipe(v.string(), v.regex(/^(sk|rk)_(test|live)_/, 'STRIPE_SECRET_KEY must be a secret or restricted key')),
-  APP_URL: url,
+  /** Checkout success/cancel URLs and absolute metadata URLs are built from it. */
+  APP_URL: httpsUrl({ allowLocalHttp: true }),
   /** Shared demo login behind the "Try the demo account" button. Server-side only. */
   DEMO_USERNAME: v.optional(v.pipe(v.string(), v.regex(/^[a-zA-Z0-9_.-]{3,30}$/)), 'Phoenix'),
   DEMO_PASSWORD: v.optional(v.pipe(v.string(), v.minLength(8, 'DEMO_PASSWORD must be at least 8 characters'))),
@@ -25,7 +29,8 @@ const ServerEnv = v.object({
   DEMO_EMAIL: v.optional(v.pipe(v.string(), v.email('DEMO_EMAIL must be an email address')), 'demo@example.com'),
   STORAGE_ACCESS_KEY_ID: nonEmpty,
   STORAGE_SECRET_ACCESS_KEY: nonEmpty,
-  STORAGE_ENDPOINT: url,
+  /** Presigned upload/download URLs inherit this scheme, so the browser only ever gets https. */
+  STORAGE_ENDPOINT: httpsUrl(),
   STORAGE_REGION: nonEmpty,
 })
 

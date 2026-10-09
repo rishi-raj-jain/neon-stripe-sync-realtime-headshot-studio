@@ -3,6 +3,7 @@ import '@dotenvx/dotenvx/config'
 import { createHash } from 'node:crypto'
 import * as v from 'valibot'
 import { BUCKETS } from '@/shared/headshots'
+import { httpsUrl, isSecureUrl } from '@/shared/https'
 import { createObjectStorage } from '@/shared/object-storage'
 
 /**
@@ -15,7 +16,7 @@ const env = v.parse(
   v.object({
     AWS_ACCESS_KEY_ID: v.string(),
     AWS_SECRET_ACCESS_KEY: v.string(),
-    AWS_ENDPOINT_URL_S3: v.pipe(v.string(), v.url()),
+    AWS_ENDPOINT_URL_S3: httpsUrl(),
     AWS_REGION: v.string(),
     APP_ORIGINS: v.optional(v.string(), 'http://localhost:3000'),
   }),
@@ -23,6 +24,9 @@ const env = v.parse(
 )
 
 const origins = env.APP_ORIGINS.split(',').map((origin) => origin.trim())
+// In production, only https origins may upload (plain http just for localhost).
+const insecure = origins.filter((origin) => !URL.canParse(origin) || !isSecureUrl(origin, { allowLocalHttp: true }))
+if (insecure.length) throw new Error(`APP_ORIGINS must be https:// (http:// only for localhost): ${insecure.join(', ')}`)
 
 const storage = createObjectStorage({
   accessKeyId: env.AWS_ACCESS_KEY_ID,

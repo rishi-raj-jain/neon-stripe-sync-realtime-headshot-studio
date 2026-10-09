@@ -1,6 +1,6 @@
 import { getUser, unauthorized } from '@/lib/auth/server'
 import { getAllowance } from '@/lib/credits'
-import { createJobIfAllowed, getRunsPage } from '@/lib/runs'
+import { createJobIfAllowed, getRunsPage, parseCursor } from '@/lib/runs'
 import { presignSelfieUpload } from '@/lib/storage'
 import { CREDITS_PER_VARIANT, MAX_VARIANTS, SELFIE_CONTENT_TYPES, STYLES, type SelfieContentType, type StyleId } from '@/shared/headshots'
 import * as v from 'valibot'
@@ -22,7 +22,9 @@ export async function GET(request: Request) {
   const user = await getUser()
   if (!user) return unauthorized()
 
-  const cursor = new URL(request.url).searchParams.get('cursor')
+  const raw = new URL(request.url).searchParams.get('cursor')
+  const cursor = raw ? parseCursor(raw) : null
+  if (raw && !cursor) return Response.json({ error: 'invalid cursor' }, { status: 400 })
   return Response.json(await getRunsPage(user.id, cursor))
 }
 

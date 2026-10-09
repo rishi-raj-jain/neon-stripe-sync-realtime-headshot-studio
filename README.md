@@ -1,5 +1,7 @@
 # Headshot Studio
 
+![Headshot Studio: studio-quality headshots from one selfie, built on Neon and Stripe](src/app/opengraph-image.png)
+
 Upload one selfie, get studio headshots. A reference app for **Stripe real-time sync to
 Postgres** on **Neon**, with no Stripe webhooks anywhere.
 
@@ -214,6 +216,27 @@ How usernames work:
   non-routable TLD (`<username>@users.headshot-studio.invalid`).
 - Email verification is off on the branch, so nothing is ever sent there.
 - Email/password is enabled on `main`. Magic links and OAuth aren't used.
+
+### Security
+
+- **SQL injection:** every query goes through Drizzle's query builder or a `sql` tagged
+  template, both of which send values as bound parameters. There is no `sql.raw` or
+  string-built SQL. Untrusted ids (job ids, pagination cursors, object keys) are validated
+  as uuids before they reach a query, so bad input is a 400/404, never a SQL error.
+- **HTTPS (production only):** when `NODE_ENV=production`, env validation requires
+  `https://` for Neon Auth, Object Storage (so presigned URLs are https too), the AI Gateway
+  and `APP_URL` (plain `http://` only for localhost), and responses carry the security
+  headers below. `npm run dev` skips both, so local setups need no certificates. The Neon serverless driver always queries Postgres over HTTPS. Auth cookies are
+  `Secure`, `storage:cors` only allows https origins, and production responses send HSTS plus
+  `nosniff`, `X-Frame-Options: DENY`, a strict referrer policy and a small CSP
+  (`next.config.ts`).
+
+### Social card
+
+`src/app/opengraph-image.png` is the site's `og:image` (Next's file convention) and the image
+at the top of this README. It's pre-rendered, not generated per request: `npm run og` renders
+`scripts/og-image.tsx` with headless Chrome so it uses the site's Google Sans. Re-run it only
+after changing the name, the copy or the marks (`CHROME_PATH=…` for another Chrome).
 
 ## Debugging
 

@@ -1,3 +1,4 @@
+import { httpsUrl } from '@/shared/https'
 import * as v from 'valibot'
 
 /**
@@ -10,10 +11,10 @@ const FunctionEnv = v.object({
   NEON_BRANCH: v.optional(v.string(), 'unknown'),
   AWS_ACCESS_KEY_ID: v.pipe(v.string(), v.minLength(1)),
   AWS_SECRET_ACCESS_KEY: v.pipe(v.string(), v.minLength(1)),
-  AWS_ENDPOINT_URL_S3: v.pipe(v.string(), v.url()),
+  AWS_ENDPOINT_URL_S3: httpsUrl(),
   AWS_REGION: v.pipe(v.string(), v.minLength(1)),
   NEON_AI_GATEWAY_TOKEN: v.optional(v.string()),
-  NEON_AI_GATEWAY_BASE_URL: v.optional(v.pipe(v.string(), v.url())),
+  NEON_AI_GATEWAY_BASE_URL: v.optional(httpsUrl()),
   IMAGE_MODEL: v.optional(v.string(), 'gpt-5-mini'),
 })
 

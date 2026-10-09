@@ -56,14 +56,25 @@ export async function toRun({ inputKey, outputKeys, createdAt, startedAt, finish
   }
 }
 
+/** Where the next page starts: the last run of the previous one. Opaque to clients. */
+type Cursor = { createdAt: Date; id: string }
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** `${createdAt ISO}_${id}` → Cursor, or null if it isn't one of ours (→ 400, never a SQL error). */
+export function parseCursor(raw: string): Cursor | null {
+  const [ts, id, ...rest] = raw.split('_')
+  if (!ts || !id || rest.length || !UUID.test(id)) return null
+  const createdAt = new Date(ts)
+  return Number.isNaN(createdAt.getTime()) ? null : { createdAt, id }
+}
+
 /**
- * One page of runs, newest first. Cursor = `${createdAt ISO}_${id}` of the last run on the
- * previous page (keyset pagination on jobs_user_created_id_idx). Fetches one extra row to
- * know whether there is a next page.
+ * One page of runs, newest first, keyset-paginated on jobs_user_created_id_idx. Fetches one
+ * extra row to know whether there is a next page.
  */
-export function runsQuery(userId: string, cursor?: string | null) {
-  const [ts, id] = cursor?.split('_') ?? []
-  const after = ts && id && !Number.isNaN(Date.parse(ts)) ? sql`(${jobs.createdAt}, ${jobs.id}) < (${new Date(ts)}, ${id}::uuid)` : undefined
+export function runsQuery(userId: string, cursor?: Cursor | null) {
+  const after = cursor ? sql`(${jobs.createdAt}, ${jobs.id}) < (${cursor.createdAt}, ${cursor.id}::uuid)` : undefined
   return db
     .select(runColumns)
     .from(jobs)
@@ -96,7 +107,7 @@ export const statsQuery = (userId: string) =>
 export const toStats = ([stats]: Awaited<ReturnType<typeof statsQuery>>) => stats ?? { runs: 0, succeeded: 0, headshots: 0, creditsSpent: 0 }
 
 /** A page of runs; the first page (no cursor) also carries stats, fetched in the same round trip. */
-export async function getRunsPage(userId: string, cursor?: string | null) {
+export async function getRunsPage(userId: string, cursor?: Cursor | null) {
   if (cursor) return toRunsPage(await runsQuery(userId, cursor))
   const [rows, stats] = await db.batch([runsQuery(userId), statsQuery(userId)])
   return { ...(await toRunsPage(rows)), stats: toStats(stats) }

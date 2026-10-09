@@ -16,7 +16,8 @@
     "db:studio": "drizzle-kit studio",
     "neon": "neon",
     "neon:plan": "neon config plan",
-    "storage:cors": "tsx scripts/storage-cors.ts"
+    "storage:cors": "tsx scripts/storage-cors.ts",
+    "og": "tsx scripts/og-image.tsx"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
